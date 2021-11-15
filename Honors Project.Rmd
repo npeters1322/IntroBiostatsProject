@@ -1,0 +1,654 @@
+---
+title: "Predictors of Michigan State University NCAA Tournament Outcomes"
+author: "Nate Peters"
+date: "11/20/2020"
+output:
+  word_document: default
+  html_document:
+    highlight: tango
+    theme: readable
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(kableExtra)
+MNCAATourneyDetailedResults <- read.csv("MNCAATourneyDetailedResults.csv")
+MTeams <- read.csv("MTeams.csv")
+MTeamConferences <- read.csv("MTeamConferences.csv")
+MRegularSeasonDetailedResults <- read.csv("MRegularSeasonDetailedResults.csv")
+Conferences <- read.csv("Conferences.csv")
+```
+
+## <span style = "color: DarkGreen;"> Goals of My Analysis </span>
+
+By looking at past NCAA basketball data, I will look into possible predictors for the outcomes of Michigan State University (MSU) NCAA Tournament games. My goal is to identify at least one possible predictor of those outcomes by looking at the regular season statistics of MSU's tournament opponents. 
+
+
+## <span style = "color: DarkGreen;"> The Data </span>
+
+
+#### Regular Season Stats
+All data I used came from <https://www.kaggle.com/c/google-cloud-ncaa-march-madness-2020-division-1-mens-tournament/data>. I started by looking at detailed regular season results from the `MRegularSeasonDetailedResults` data set, which covered the 2002-03 season through the 2019-20 season. The data covered every game where both teams were Division I schools; note that some records and win percentages may be different than what you would find online because many Division I schools play non-Division I schools during the season, and most websites include non-Division I opponents in record keeping. Also, games included in the data are from the beginning of each season through the end of the conference tournaments.
+
+At the beginning, the data set I had to work with included in-game team stats for each game. A few of the stats were scores, field goals made, defensive rebounds, and turnovers; each stat was given for both the winner and loser of each game. To turn individual game statistics into season-wide statistics for each team, I did a lot of data wrangling and manipulation. I first grouped the data by `WTeamID`, which was a unique ID number for each team, and `Season`, which identified the year the season ended. Then, I used the function `summarize()` to calculate season totals of each statistic for each team. Since grouping by `WTeamID` only gave me the team stats for when each team won, I then did the same steps again; however, this time I replaced `WTeamID` with `LTeamID` to also get the stats for when each team lost. 
+
+```{r include = FALSE}
+#code for first new dataframe I made
+
+#get wins for each team in each season through conference tournaments
+reg_season_wins <- MRegularSeasonDetailedResults %>%
+  group_by(WTeamID, Season) %>%
+  summarize(Wins = n())
+
+#get losses for each team in each season through conference tournaments
+reg_season_losses <- MRegularSeasonDetailedResults %>%
+  group_by(LTeamID, Season) %>%
+  summarize(Losses = n())
+
+#merge wins and losses dataframes
+reg_season_records <- merge(reg_season_wins, reg_season_losses, 
+                      by.x = c("WTeamID", "Season"), by.y= c("LTeamID", "Season"), all.x=TRUE, all.y=TRUE) 
+
+#replace NA values with 0
+reg_season_records[is.na(reg_season_records)] = 0
+
+#get win pct
+reg_season_records <- reg_season_records %>%
+  mutate(win_pct = Wins/(Wins+Losses)*100)
+
+#rename team id column
+reg_season_records <- reg_season_records %>%
+  rename(TeamID = WTeamID)
+
+#merge records df with teams
+reg_season_records <- merge(reg_season_records, MTeams, by = "TeamID")
+
+#delete two columns in records df
+reg_season_records$FirstD1Season <- NULL
+reg_season_records$LastD1Season <- NULL
+```
+
+Below is an example of the code I used to gather total points scored in wins and total points scored in losses for each team and each season. By merging my data later on, I could calculate statistics such as average points per game in a season for each team. 
+
+```{r results='hide', message=FALSE}
+reg_season_pts_scored_in_wins <- MRegularSeasonDetailedResults %>%
+  group_by(WTeamID, Season) %>%
+  summarize(pts_in_win = sum(WScore))
+
+reg_season_pts_scored_in_losses <- MRegularSeasonDetailedResults %>%
+  group_by(LTeamID, Season) %>%
+  summarize(pts_in_loss = sum(LScore))
+```
+
+Next, I merged the two new dataframes above into one dataframe. An example of the code is below.
+
+```{r results = 'hide'}
+reg_season_pts_scored <- merge(reg_season_pts_scored_in_wins, reg_season_pts_scored_in_losses, 
+by.x= c("WTeamID", "Season"), by.y= c("LTeamID", "Season"), 
+                              all.x=TRUE, all.y=TRUE) 
+```
+
+Above, you can see that I set all.x and all.y to TRUE. That is because some teams were not included in one of the two previous data sets (i.e. they either did not win a game in a given season or did not lose a game), so when merging, that particular team would have been excluded and lost from further analysis. While this loss of data might not have affected my end result in this project, it could have been detrimental in other projects, as data for undefeated teams, for example, could be very helpful, especially if considering winning percentage. 
+
+After that, I merged the `reg_season_pts_scored` data set with a previous data set I had made for the records of each team in each season, and I named the merged data set `reg_season_stats`. I set all.x and all.y to TRUE again, just to ensure I did not miss any observations.
+```{r results='hide'}
+reg_season_stats <- merge(reg_season_records, reg_season_pts_scored, by.x = c("TeamID", "Season"), 
+                          by.y = c("WTeamID", "Season"), all.x = TRUE, all.y= TRUE)
+```
+
+After merging, I noticed that some values in the dataframe were `NA`. I realized it occurred because I set all.x and all.y to TRUE. For example, the University of Kentucky did not lose a regular season basketball game during the 2014-15 season, so when I grouped by `LTeamID` and `Season` in one of my previous steps, the 2015 Kentucky team was not included at all. By setting all.x and all.y to TRUE during the merge, I forced R to keep that observation for Kentucky, even though it could not find any data to merge with. Since it could find nothing to merge with but was forced to keep the observation, R put the value `NA` in that spot. Since `NA` is not very helpful, I changed every `NA` value to 0 using the code below. 
+```{r results='hide'}
+reg_season_stats[is.na(reg_season_stats)] = 0
+```
+
+This helped me calculate things later such as winning percentage; with an `NA` value, my calculation for winning percentage would have shown as `NA`, rather than 1.0 for Kentucky.
+
+My last step with this dataset included mutating the data to find per-game season stats for each team, rather than cumulative season totals. To find average points scored per game, for example, I used the following code. 
+```{r results='hide'}
+reg_season_stats <- reg_season_stats %>%
+  mutate(ppg = (pts_in_win + pts_in_loss)/(Wins + Losses))
+```
+
+I repeated very similar steps for all of the other major stats in the `MRegularSeasonDetailedResults` data set to complete my `reg_season_stats` data set. 
+
+```{r include= FALSE}
+#fgm in wins and losses
+reg_season_fgm_in_wins <- MRegularSeasonDetailedResults %>%
+  group_by(WTeamID, Season) %>%
+  summarize(fgm_in_win = sum(WFGM))
+
+reg_season_fgm_in_losses <- MRegularSeasonDetailedResults %>%
+  group_by(LTeamID, Season) %>%
+  summarize(fgm_in_loss = sum(LFGM))
+
+#merge
+reg_season_fgm <- merge(reg_season_fgm_in_wins, reg_season_fgm_in_losses, by.x = c("WTeamID", "Season"), by.y= c("LTeamID", "Season"), all.x=TRUE, all.y=TRUE)
+
+#merge again
+reg_season_stats <- merge(reg_season_stats, reg_season_fgm, by.x = c("TeamID", "Season"), by.y = c("WTeamID", "Season"), all.x = TRUE, all.y= TRUE)
+
+#replace NA values with 0
+reg_season_stats[is.na(reg_season_stats)] = 0
+
+#get fgm pg
+reg_season_stats <- reg_season_stats %>%
+  mutate(FGM_pg = (fgm_in_win + fgm_in_loss)/(Wins + Losses))
+
+#########################################################################################################
+
+#fga in wins and losses
+reg_season_fga_in_wins <- MRegularSeasonDetailedResults %>%
+  group_by(WTeamID, Season) %>%
+  summarize(fga_in_win = sum(WFGA))
+
+reg_season_fga_in_losses <- MRegularSeasonDetailedResults %>%
+  group_by(LTeamID, Season) %>%
+  summarize(fga_in_loss = sum(LFGA))
+
+#merge
+reg_season_fga <- merge(reg_season_fga_in_wins, reg_season_fga_in_losses, by.x = c("WTeamID", "Season"), by.y= c("LTeamID", "Season"), all.x=TRUE, all.y=TRUE)
+
+#merge again
+reg_season_stats <- merge(reg_season_stats, reg_season_fga, by.x = c("TeamID", "Season"), by.y = c("WTeamID", "Season"), all.x = TRUE, all.y= TRUE)
+
+#replace NA values with 0
+reg_season_stats[is.na(reg_season_stats)] = 0
+
+#get fga pg
+reg_season_stats <- reg_season_stats %>%
+  mutate(FGA_pg = (fga_in_win + fga_in_loss)/(Wins + Losses))
+
+
+######################################################################################################
+
+
+#fgm3 in wins and losses
+reg_season_fgm3_in_wins <- MRegularSeasonDetailedResults %>%
+  group_by(WTeamID, Season) %>%
+  summarize(fgm3_in_win = sum(WFGM3))
+
+reg_season_fgm3_in_losses <- MRegularSeasonDetailedResults %>%
+  group_by(LTeamID, Season) %>%
+  summarize(fgm3_in_loss = sum(LFGM3))
+
+#merge
+reg_season_fgm3 <- merge(reg_season_fgm3_in_wins, reg_season_fgm3_in_losses, by.x = c("WTeamID", "Season"), by.y= c("LTeamID", "Season"), all.x=TRUE, all.y=TRUE)
+
+#merge again
+reg_season_stats <- merge(reg_season_stats, reg_season_fgm3, by.x = c("TeamID", "Season"), by.y = c("WTeamID", "Season"), all.x = TRUE, all.y= TRUE)
+
+#replace NA values with 0
+reg_season_stats[is.na(reg_season_stats)] = 0
+
+#get fgm pg
+reg_season_stats <- reg_season_stats %>%
+  mutate(FGM3_pg = (fgm3_in_win + fgm3_in_loss)/(Wins + Losses))
+
+#####################################################################################################
+
+#fga3 in wins and losses
+reg_season_fga3_in_wins <- MRegularSeasonDetailedResults %>%
+  group_by(WTeamID, Season) %>%
+  summarize(fga3_in_win = sum(WFGA3))
+
+reg_season_fga3_in_losses <- MRegularSeasonDetailedResults %>%
+  group_by(LTeamID, Season) %>%
+  summarize(fga3_in_loss = sum(LFGA3))
+
+#merge
+reg_season_fga3 <- merge(reg_season_fga3_in_wins, reg_season_fga3_in_losses, by.x = c("WTeamID", "Season"), by.y= c("LTeamID", "Season"), all.x=TRUE, all.y=TRUE)
+
+#merge again
+reg_season_stats <- merge(reg_season_stats, reg_season_fga3, by.x = c("TeamID", "Season"), by.y = c("WTeamID", "Season"), all.x = TRUE, all.y= TRUE)
+
+#replace NA values with 0
+reg_season_stats[is.na(reg_season_stats)] = 0
+
+#get fgm pg
+reg_season_stats <- reg_season_stats %>%
+  mutate(FGA3_pg = (fga3_in_win + fga3_in_loss)/(Wins + Losses))
+
+############################################################################################
+
+
+#ftm in wins and losses
+reg_season_ftm_in_wins <- MRegularSeasonDetailedResults %>%
+  group_by(WTeamID, Season) %>%
+  summarize(ftm_in_win = sum(WFTM))
+
+reg_season_ftm_in_losses <- MRegularSeasonDetailedResults %>%
+  group_by(LTeamID, Season) %>%
+  summarize(ftm_in_loss = sum(LFTM))
+
+#merge
+reg_season_ftm <- merge(reg_season_ftm_in_wins, reg_season_ftm_in_losses, by.x = c("WTeamID", "Season"), by.y= c("LTeamID", "Season"), all.x=TRUE, all.y=TRUE)
+
+#merge again
+reg_season_stats <- merge(reg_season_stats, reg_season_ftm, by.x = c("TeamID", "Season"), by.y = c("WTeamID", "Season"), all.x = TRUE, all.y= TRUE)
+
+#replace NA values with 0
+reg_season_stats[is.na(reg_season_stats)] = 0
+
+#get ftm pg
+reg_season_stats <- reg_season_stats %>%
+  mutate(FTM_pg = (ftm_in_win + ftm_in_loss)/(Wins + Losses))
+
+################################################################################################
+
+#fta in wins and losses
+reg_season_fta_in_wins <- MRegularSeasonDetailedResults %>%
+  group_by(WTeamID, Season) %>%
+  summarize(fta_in_win = sum(WFTA))
+
+reg_season_fta_in_losses <- MRegularSeasonDetailedResults %>%
+  group_by(LTeamID, Season) %>%
+  summarize(fta_in_loss = sum(LFTA))
+
+#merge
+reg_season_fta <- merge(reg_season_fta_in_wins, reg_season_fta_in_losses, by.x = c("WTeamID", "Season"), by.y= c("LTeamID", "Season"), all.x=TRUE, all.y=TRUE)
+
+#merge again
+reg_season_stats <- merge(reg_season_stats, reg_season_fta, by.x = c("TeamID", "Season"), by.y = c("WTeamID", "Season"), all.x = TRUE, all.y= TRUE)
+
+#replace NA values with 0
+reg_season_stats[is.na(reg_season_stats)] = 0
+
+#get fta pg
+reg_season_stats <- reg_season_stats %>%
+  mutate(FTA_pg = (fta_in_win + fta_in_loss)/(Wins + Losses))
+#####################################################################################################
+
+#Offens. reb. in wins and losses
+reg_season_orb_in_wins <- MRegularSeasonDetailedResults %>%
+  group_by(WTeamID, Season) %>%
+  summarize(orb_in_win = sum(WOR))
+
+reg_season_orb_in_losses <- MRegularSeasonDetailedResults %>%
+  group_by(LTeamID, Season) %>%
+  summarize(orb_in_loss = sum(LOR))
+
+#merge
+reg_season_orb <- merge(reg_season_orb_in_wins, reg_season_orb_in_losses, by.x = c("WTeamID", "Season"), by.y= c("LTeamID", "Season"), all.x=TRUE, all.y=TRUE)
+
+#merge again
+reg_season_stats <- merge(reg_season_stats, reg_season_orb, by.x = c("TeamID", "Season"), by.y = c("WTeamID", "Season"), all.x = TRUE, all.y= TRUE)
+
+#replace NA values with 0
+reg_season_stats[is.na(reg_season_stats)] = 0
+
+#get orb pg
+reg_season_stats <- reg_season_stats %>%
+  mutate(ORB_pg = (orb_in_win + orb_in_loss)/(Wins + Losses))
+###########################################################################################################
+
+#defen. reb. in wins and losses
+reg_season_drb_in_wins <- MRegularSeasonDetailedResults %>%
+  group_by(WTeamID, Season) %>%
+  summarize(drb_in_win = sum(WDR))
+
+reg_season_drb_in_losses <- MRegularSeasonDetailedResults %>%
+  group_by(LTeamID, Season) %>%
+  summarize(drb_in_loss = sum(LDR))
+
+#merge
+reg_season_drb <- merge(reg_season_drb_in_wins, reg_season_drb_in_losses, by.x = c("WTeamID", "Season"), by.y= c("LTeamID", "Season"), all.x=TRUE, all.y=TRUE)
+
+#merge again
+reg_season_stats <- merge(reg_season_stats, reg_season_drb, by.x = c("TeamID", "Season"), by.y = c("WTeamID", "Season"), all.x = TRUE, all.y= TRUE)
+
+#replace NA values with 0
+reg_season_stats[is.na(reg_season_stats)] = 0
+
+#get drb pg
+reg_season_stats <- reg_season_stats %>%
+  mutate(DRB_pg = (drb_in_win + drb_in_loss)/(Wins + Losses))
+#############################################################################################################
+
+#assists in wins and losses
+reg_season_ast_in_wins <- MRegularSeasonDetailedResults %>%
+  group_by(WTeamID, Season) %>%
+  summarize(ast_in_win = sum(WAst))
+
+reg_season_ast_in_losses <- MRegularSeasonDetailedResults %>%
+  group_by(LTeamID, Season) %>%
+  summarize(ast_in_loss = sum(LAst))
+
+#merge
+reg_season_ast <- merge(reg_season_ast_in_wins, reg_season_ast_in_losses, by.x = c("WTeamID", "Season"), by.y= c("LTeamID", "Season"), all.x=TRUE, all.y=TRUE)
+
+#merge again
+reg_season_stats <- merge(reg_season_stats, reg_season_ast, by.x = c("TeamID", "Season"), by.y = c("WTeamID", "Season"), all.x = TRUE, all.y= TRUE)
+
+#replace NA values with 0
+reg_season_stats[is.na(reg_season_stats)] = 0
+
+#get ast pg
+reg_season_stats <- reg_season_stats %>%
+  mutate(Ast_pg = (ast_in_win + ast_in_loss)/(Wins + Losses))
+###############################################################################################################
+
+#turnover in wins and losses
+reg_season_to_in_wins <- MRegularSeasonDetailedResults %>%
+  group_by(WTeamID, Season) %>%
+  summarize(to_in_win = sum(WTO))
+
+reg_season_to_in_losses <- MRegularSeasonDetailedResults %>%
+  group_by(LTeamID, Season) %>%
+  summarize(to_in_loss = sum(LTO))
+
+#merge
+reg_season_to <- merge(reg_season_to_in_wins, reg_season_to_in_losses, by.x = c("WTeamID", "Season"), by.y= c("LTeamID", "Season"), all.x=TRUE, all.y=TRUE)
+
+#merge again
+reg_season_stats <- merge(reg_season_stats, reg_season_to, by.x = c("TeamID", "Season"), by.y = c("WTeamID", "Season"), all.x = TRUE, all.y= TRUE)
+
+#replace NA values with 0
+reg_season_stats[is.na(reg_season_stats)] = 0
+
+#get to pg
+reg_season_stats <- reg_season_stats %>%
+  mutate(TO_pg = (to_in_win + to_in_loss)/(Wins + Losses))
+###################################################################################################################
+
+#steals in wins and losses
+reg_season_stl_in_wins <- MRegularSeasonDetailedResults %>%
+  group_by(WTeamID, Season) %>%
+  summarize(stl_in_win = sum(WStl))
+
+reg_season_stl_in_losses <- MRegularSeasonDetailedResults %>%
+  group_by(LTeamID, Season) %>%
+  summarize(stl_in_loss = sum(LStl))
+
+#merge
+reg_season_stl <- merge(reg_season_stl_in_wins, reg_season_stl_in_losses, by.x = c("WTeamID", "Season"), by.y= c("LTeamID", "Season"), all.x=TRUE, all.y=TRUE)
+
+#merge again
+reg_season_stats <- merge(reg_season_stats, reg_season_stl, by.x = c("TeamID", "Season"), by.y = c("WTeamID", "Season"), all.x = TRUE, all.y= TRUE)
+
+#replace NA values with 0
+reg_season_stats[is.na(reg_season_stats)] = 0
+
+#get stl pg
+reg_season_stats <- reg_season_stats %>%
+  mutate(Stl_pg = (stl_in_win + stl_in_loss)/(Wins + Losses))
+#######################################################################################################################
+
+#blk in wins and losses
+reg_season_blk_in_wins <- MRegularSeasonDetailedResults %>%
+  group_by(WTeamID, Season) %>%
+  summarize(blk_in_win = sum(WBlk))
+
+reg_season_blk_in_losses <- MRegularSeasonDetailedResults %>%
+  group_by(LTeamID, Season) %>%
+  summarize(blk_in_loss = sum(LBlk))
+
+#merge
+reg_season_blk <- merge(reg_season_blk_in_wins, reg_season_blk_in_losses, by.x = c("WTeamID", "Season"), by.y= c("LTeamID", "Season"), all.x=TRUE, all.y=TRUE)
+
+#merge again
+reg_season_stats <- merge(reg_season_stats, reg_season_blk, by.x = c("TeamID", "Season"), by.y = c("WTeamID", "Season"), all.x = TRUE, all.y= TRUE)
+
+#replace NA values with 0
+reg_season_stats[is.na(reg_season_stats)] = 0
+
+#get blk pg
+reg_season_stats <- reg_season_stats %>%
+  mutate(Blk_pg = (blk_in_win + blk_in_loss)/(Wins + Losses))
+####################################################################################################################
+
+#fouls in wins and losses
+reg_season_pf_in_wins <- MRegularSeasonDetailedResults %>%
+  group_by(WTeamID, Season) %>%
+  summarize(pf_in_win = sum(WPF))
+
+reg_season_pf_in_losses <- MRegularSeasonDetailedResults %>%
+  group_by(LTeamID, Season) %>%
+  summarize(pf_in_loss = sum(LPF))
+
+#merge
+reg_season_pf <- merge(reg_season_pf_in_wins, reg_season_pf_in_losses, by.x = c("WTeamID", "Season"), by.y= c("LTeamID", "Season"), all.x=TRUE, all.y=TRUE)
+
+#merge again
+reg_season_stats <- merge(reg_season_stats, reg_season_pf, by.x = c("TeamID", "Season"), by.y = c("WTeamID", "Season"), all.x = TRUE, all.y= TRUE)
+
+#replace NA values with 0
+reg_season_stats[is.na(reg_season_stats)] = 0
+
+#get pf pg
+reg_season_stats <- reg_season_stats %>%
+  mutate(PF_pg = (pf_in_win + pf_in_loss)/(Wins + Losses))
+##########################################################################################################################
+
+#record by location
+reg_season_wins_by_loc <- MRegularSeasonDetailedResults %>%
+  group_by(WTeamID, Season) %>%
+  summarize(home_wins = sum(WLoc == "H"), away_wins = sum(WLoc == "A"), neutral_wins = sum(WLoc == "N"))
+
+reg_season_losses_by_loc <- MRegularSeasonDetailedResults %>%
+  group_by(LTeamID, Season) %>%
+  summarize(home_losses = sum(WLoc == "A"), away_losses = sum(WLoc == "H"), neutral_losses = sum(WLoc == "N"))
+
+#merge
+reg_season_record_by_loc <- merge(reg_season_wins_by_loc, reg_season_losses_by_loc, by.x = c("WTeamID", "Season"), by.y=c("LTeamID", "Season"), all.x = TRUE, all.y=TRUE)
+
+#merge again
+reg_season_stats <- merge(reg_season_stats, reg_season_record_by_loc, by.x = c("TeamID", "Season"), by.y = c("WTeamID", "Season"), all.x = TRUE, all.y= TRUE)
+
+reg_season_stats[is.na(reg_season_stats)] = 0
+
+#get W% for each location
+reg_season_stats <- reg_season_stats %>%
+  mutate(home_win_pct = (home_wins)/(home_wins + home_losses)*100, away_win_pct = (away_wins)/(away_wins+away_losses)*100, neut_win_pct = (neutral_wins)/(neutral_wins+neutral_losses)*100)
+```
+Because all of this wrangling and merging gave me many unnecessary variables, I narrowed my data set down using the following code and only selecting variables I might use later on.
+
+```{r results='hide'}
+reg_season_stats <- reg_season_stats %>%
+  select(TeamID, Season, TeamName, ppg, FGM_pg, FGA_pg, FGM3_pg, FGA3_pg, FTM_pg, FTA_pg, ORB_pg, 
+         DRB_pg, Ast_pg, TO_pg, Stl_pg, Blk_pg, PF_pg, win_pct, home_win_pct, away_win_pct, 
+         neut_win_pct)
+```
+
+The below table shows the beginning of the `reg_season_stats` data set, while also leaving out a few variables to make the format look correct.
+```{r echo=FALSE}
+reg_season_table <- head(reg_season_stats) %>%
+  select(TeamID, Season, TeamName, ppg, FGM_pg, FGA_pg, FGM3_pg, FGA3_pg)
+reg_season_table %>%
+  kbl() %>%
+  kable_styling()
+```
+
+#### MSU NCAA Tournament Details
+
+I also had to do data wrangling for another data set called `MNCAATourneyDetailedResults`, which covers NCAA Tournament games from 2003 through 2019. I did so by first merging it with the `MTeams` data set, which gives team names for each team ID, to get the team names of both winners and losers of the games. I also changed the column names to reflect whether the team was the winner or loser. I then deleted a few columns that I knew would have no meaning at the end. The code for these steps is below.
+```{r results='hide'}
+
+MNCAATourneyDetailedResults <- merge(MNCAATourneyDetailedResults, MTeams, by.x= "WTeamID", 
+                                     by.y ="TeamID")
+
+MNCAATourneyDetailedResults <- MNCAATourneyDetailedResults %>%
+  rename(WTeam=TeamName)
+
+MNCAATourneyDetailedResults <- merge(MNCAATourneyDetailedResults, MTeams, by.x= "LTeamID", 
+                                     by.y ="TeamID")
+
+MNCAATourneyDetailedResults <- MNCAATourneyDetailedResults %>%
+  rename(LTeam=TeamName)
+
+MNCAATourneyDetailedResults$FirstD1Season.x <- NULL
+MNCAATourneyDetailedResults$FirstD1Season.y <- NULL
+MNCAATourneyDetailedResults$LastD1Season.x <- NULL
+MNCAATourneyDetailedResults$LastD1Season.y <- NULL
+```
+
+
+Then, I merged the `MNCAATourneyDetailedResults` data set with another called `MTeamConferences`, which included the conferences for each team for each season. In the merge, I also had to specify to merge by `Season` as well because some teams have changed conferences over time. I also renamed columns to specify if the conference was for the winning or losing team. The following code reflects the changes I just discussed. 
+```{r results='hide'}
+MNCAATourneyDetailedResults <- merge(MNCAATourneyDetailedResults, MTeamConferences, 
+                                     by.x = c("Season", "WTeamID"), by.y = c("Season", "TeamID"))
+
+MNCAATourneyDetailedResults <- MNCAATourneyDetailedResults %>%
+  rename(WTeamConf = ConfAbbrev)
+
+MNCAATourneyDetailedResults <- merge(MNCAATourneyDetailedResults, MTeamConferences, 
+                                     by.x = c("Season", "LTeamID"), by.y = c("Season", "TeamID"))
+
+MNCAATourneyDetailedResults <- MNCAATourneyDetailedResults %>%
+  rename(LTeamConf = ConfAbbrev)
+```
+
+
+Since I am focusing on Michigan State tournament games, I also had to do more data wrangling to make a data set for all of the MSU NCAA tournament games. Drawing from the `MNCAATourneyDetailedResults` data set, I created a data set just containing MSU games. The below code made a new data set called `msu_tourney_games`.
+
+```{r results='hide'}
+msu_tourney_games <- MNCAATourneyDetailedResults %>%
+  filter(WTeam == "Michigan St" | LTeam == "Michigan St")
+```
+
+Since my end goal was to make some logistic models, I needed a binary variable. I wanted to figure out predictors for the outcomes of MSU tournament games, so the dependent variable, or response variable, would be the outcome of the game (win or loss for MSU), and to make it a binary variable, I put 1 for an MSU win and 0 for an MSU loss. I did so using the following if/else statement. 
+
+```{r results='hide'}
+msu_tourney_games$Vic_for_MSU <- ifelse(msu_tourney_games$WTeam == "Michigan St", 1, 0)
+```
+
+To make it easier to just find the opponent and opponent conference of MSU, I created two variables using if/else statements. This made it easy to merge with the `Conferences` data set, which made the conference names easier to read. After merging, I deleted the column that had the harder-to-read versions of the conferences and renamed the merged conferences column to be `Opp_conf`. I did all of this with the following code.
+
+
+```{r results='hide'}
+
+msu_tourney_games$opponent <- ifelse(msu_tourney_games$WTeam == "Michigan St", 
+                                     msu_tourney_games$LTeam, msu_tourney_games$WTeam)
+msu_tourney_games$Opp_conf <- ifelse(msu_tourney_games$WTeam == "Michigan St", 
+                                     msu_tourney_games$LTeamConf, msu_tourney_games$WTeamConf)
+
+
+msu_tourney_games <- merge(msu_tourney_games, Conferences, by.x = "Opp_conf", by.y= "ConfAbbrev")
+
+
+msu_tourney_games$Opp_conf <- NULL
+
+
+msu_tourney_games <- msu_tourney_games %>%
+  rename(opp_conf = Description)
+```
+
+My last step of data wrangling was to merge the `msu_tourney_stats` data set with the `reg_season_stats` data set I created earlier. The code to merge the data sets is below, followed by a table of the data. 
+
+```{r results='hide'}
+msu_tourney_games <- merge(msu_tourney_games, reg_season_stats, by.x = c("opponent", "Season"), 
+                           by.y = c("TeamName", "Season"))
+```
+
+
+This merged data set was very large and included almost 100 variables, many of which I would not use later on for this project, so I used `select()` to only select the columns I wanted to keep. The code for that is shown below, followed by a table that includes the beginning of the data set. The table also leaves out some variables for formatting reasons. 
+```{r results='hide'}
+msu_tourney_games <- msu_tourney_games %>%
+  select(opponent, Season, Vic_for_MSU, opp_conf, ppg, FGM_pg, FGA_pg, FGM3_pg, FGA3_pg, FTM_pg, 
+         FTA_pg, ORB_pg, DRB_pg, Ast_pg, TO_pg, Stl_pg, Blk_pg, PF_pg, win_pct, home_win_pct, 
+         away_win_pct, neut_win_pct)
+```
+```{r echo=FALSE}
+msu_tourney_table <- head(msu_tourney_games) %>%
+  select(opponent, Season, Vic_for_MSU, opp_conf, ppg, win_pct)
+msu_tourney_table %>%
+  kbl() %>%
+  kable_styling()
+```
+
+All variables I did include in this final data set are listed below with a brief description of each one. Besides `Win`, each variable corresponds to the season stats for the opponent of MSU or characteristics of MSU's opponent.
+
+1. `opponent`: The team name of MSU's opponent
+2. `Season`: The year of the tournament where the game was played
+3. `Vic_for_MSU`: Victory for MSU? 1 for yes, 0 for no)
+4. `opp_conference`: The conference of MSU's opponent (note that some may seem wrong, but it is because some teams have played in different conferences in the past)
+5. `ppg`: The average points per game scored
+6. `FGM_pg`: The average number of field goals made per game (both two-pointers and three-pointers combined)
+7. `FGA_pg`: The average number of field goals attempted per game
+8. `FGM3_pg`: The average number of three-point field goals made per game
+9. `FGA3_pg`: The average number of three-point field goals attempted per game
+10. `FTM_pg`: The average number of free throws made per game
+11. `FTA_pg`: The average number of free throws attempted per game
+12. `ORB_pg`: The average number of offensive rebounds per game (rebounds from a missed shot attempt by own team)
+13. `DRB_pg`: The average number of defensive rebounds per game (rebounds from a missed shot attempt by opponent)
+14. `Ast_pg`: The average number of assists per game
+15. `TO_pg`: The average number of turnovers per game
+16. `Stl_pg`: The average number of steals per game
+17. `Blk_pg`: The average number of blocks per game
+18. `PF_pg`: The average number of personal fouls per game 
+19. `win_pct`: Gives the winning percentage out of 100 (100 means no losses during the season)
+20. `home_win_pct`: Gives the winning percentage out of 100 for home games
+21. `away_win_pct`: Gives the winning percentage out of 100 for away games
+22. `neut_win_pct`: Gives the winning percentage out of 100 for games at a neutral site 
+
+## <span style = "color: DarkGreen;"> Exploratory Data Analysis </span>
+To get started with my data analysis, I plotted a few graphs just to quickly take a look at possible associations between variables.
+
+
+```{r echo=FALSE}
+ggplot(data=msu_tourney_games, aes(y=ppg, group=Vic_for_MSU))+
+  geom_boxplot()+
+  labs(title ="Boxplots of Reg. Season PPG of MSU Tourney Opp. Grouped by MSU's Result", x="MSU's Result Against Team (Left=Loss, Right=Win)", y="Reg. Season PPG Scored by MSU's Tourney Opponent")
+```
+
+The above plot could be of interest because it looks like when MSU loses a tournament game, their opponent's regular season average of points per game is a little higher than when MSU wins, so the opponents they lose to might be higher scoring teams.
+
+```{r echo=FALSE}
+ggplot(data=msu_tourney_games, aes(y=away_win_pct, group=Vic_for_MSU))+
+  geom_boxplot()+
+  labs(title ="Boxplot of Reg. Season Away Win % of MSU Tourney Opp. Grouped by Outcome", x="MSU's Result Against Team (Left=Loss, Right=Win)", y="Reg. Season Away Winning % by MSU's Tourney Opponent")
+```
+
+This plot could also show some significance. The median winning percentages in both look very similar, but other than that, there are some differences. Also, based on the spread, it looks like teams who beat MSU might have a little higher away winning percentage, as the spread of away winning percentage for those who MSU beats goes much lower, and does not go as high. 
+
+I also ran a Chi-square test for conferences and outcome of the games. 
+```{r echo=FALSE, warning=FALSE}
+msu_cat_variables <- data.frame(Opp_conf = c(msu_tourney_games$opp_conf), Win = c(msu_tourney_games$Vic_for_MSU))
+msu_table <- table(msu_cat_variables)
+msu_table
+chisq.test(msu_table)
+
+```
+As can be seen, the p-value is very large (0.6209), so from this data, there is not enough evidence to conclude that the outcome of the game for MSU depends on the conference of the team they played. In addition, I would guess that many of the expected values are less than 5, so a Chi-square test is not very appropriate in this scenario. Perhaps if there was more data we might see a bigger difference and be able to use the Chi-square test. In this project, I will not be exploring this categorical variable anymore; for the next part, I will be using only numerical variables.
+
+
+## <span style = "color: DarkGreen;"> Fitting Logistic Models </span>
+After going through my exploratory analysis, I decided to fit simple logistic models for `Wins` by each numerical variable individually, just to make sure I don't miss anything important. By doing simple models first, I could identify variables that could be significant predictors before making logistic models with multiple predictor variables. An example of a model I fit is below, along with a summary of the model and a graph.  
+
+```{r}
+by_Wpct_model <- glm(Vic_for_MSU ~ win_pct, data=msu_tourney_games, family=binomial)
+summary(by_Wpct_model)
+```
+```{r echo=FALSE, message=FALSE}
+ggplot(data=msu_tourney_games, aes(x=win_pct, y=Vic_for_MSU))+
+  geom_point()+
+  geom_smooth(method="glm", se=FALSE, method.args=list(family=binomial))+
+  xlab("Opponent Winning Percentage")+
+  ylab("Victory for MSU?")+
+  ggtitle("Logistic Regression Model of MSU Outcomes by Opponent Winning Percentage")
+```
+
+To be considered a significant predictor, I used the p-values from the simple models and considered it significant if there was a p-value of less than or equal to 0.3. In the case above, it would be considered significant, as the p-value is 0.0965. After individually running simple logistic models of game outcome by the other season statistics, I considered eight more as significant predictors, as they gave p-values of 0.3 or less. The variables that I considered as significant predictors for now are `ppg`, `FGM_pg`, `FTM_pg`, `FTA_pg`, `DRB_pg`, `Ast_pg`, `win_pct`, `home_win_pct`, and `away_win_pct`. Of them all, the model by `win_pct` currently has the lowest p-value, which I gave above.  
+
+For my next step, I did a multiple logistic regression model by all of the variables I labeled significant. The model code and summary is given below. 
+```{r}
+by_significants_model <- glm(Vic_for_MSU ~ win_pct + ppg + FGM_pg + FTM_pg + FTA_pg + DRB_pg + 
+                               Ast_pg + home_win_pct + away_win_pct, data=msu_tourney_games, 
+                               family=binomial)
+summary(by_significants_model)
+```
+While at first I was only considering the p-value to find significant predictors, I will now look at both the p-values and AIC. Looking back at the AIC from the simple model I made a little while back, the one here is much higher. To find the best-fitting model, I want to find the lowest AIC. To find it, I took the variable with the highest p-value in the above model out, so I removed `FGM_pg`. Removing it gave me the following new model.
+
+```{r echo=FALSE}
+by_significants_model <- glm(Vic_for_MSU ~ win_pct + ppg + FTM_pg + FTA_pg + DRB_pg + Ast_pg + home_win_pct + away_win_pct, data=msu_tourney_games, family=binomial)
+summary(by_significants_model)
+```
+
+As can be seen, the AIC went down. Next, I took out the one with the highest p-value again, so `Ast_pg`. I repeated this same step until getting to the final lone variable, which was `win_pct`. In that model, the AIC was the lowest out of any of the other models I had run, including models with multiple predictors.
+
+## <span style = "color: DarkGreen;"> Drawing Conclusions </span>
+Based on the various models I created, one could be seen to be a stronger fit than the rest. By looking at the AICs that the various summaries gave me, the lowest was 67.497. This AIC came from the simple model of win outcome by opponent winning percentage. Although far from perfect, of the variables I tested, opponent regular season winning percentage was the most predictive of the outcome of MSU's NCAA Tournament games, and as can be seen by the graph, as opponent regular season winning percentage increases, the probability that MSU wins decreases. However, it is not a linear model, so the decrease in likelihood of winning is not constant. The regression coefficient is -0.06055, which is the log of the odds ratio for the predictor. Taken exponentially, you get `r exp(-0.06055)`. This indicates that a one unit increase in opponent regular season winning percentage will decrease the odds of winning by about `r 100- (exp(-0.06055) * 100)`%.
+
+
+
