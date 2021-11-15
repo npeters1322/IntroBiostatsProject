@@ -1,4 +1,4 @@
-# Intro Biostats Project
+# Intro to Biostats Project
 My Introduction to Biostatistics Project
 
 As my first R project, I did a basic exploratory analysis and fit a few logistic regression models to try to find predictors of Michigan State University men's basketball NCAA Tournament outcomes. Although it is not very advanced, it was my first attempt at my own project using R to do data analysis.
